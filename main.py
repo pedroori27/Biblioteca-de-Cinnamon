@@ -61,4 +61,16 @@ class biblioteca():
     def menuPrincipal():
         pass
 
-MenuBiblioteca = ttk.Tk()
+def abrirBiblioteca(): # Abre o banco na tela de escolher entre registro e login
+    home.grid(row=0, column=0, sticky="nsew") # nsew significa que vai se alinhar com os 4 cantos da tela
+    MenuBiblioteca.mainloop()
+
+MenuBiblioteca = tk.Tk()
+MenuBiblioteca.geometry("500x500")
+MenuBiblioteca.title('Banco')
+MenuBiblioteca.rowconfigure(0, weight=1)
+MenuBiblioteca.columnconfigure(0, weight=1)
+
+home = tk.Frame(MenuBiblioteca, bg="#A3713B")
+
+abrirBiblioteca()
