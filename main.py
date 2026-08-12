@@ -12,6 +12,7 @@ criar tela com foto
 usar hash?
 """
 import random
+import csv
 import tkinter  as tk
 from tkinter import ttk, messagebox, Menu
 from tkinter.messagebox import showerror, showwarning, showinfo
@@ -24,6 +25,9 @@ COR_CREME = "#FFF4E0"
 COR_BEGE = "#E8D3B9"
 COR_BRANCO = "#FFFDF8"
 COR_TEXTO = "#3E2723"
+
+# Arquivo onde as contas serão salvas
+ARQUIVO_CONTAS_CSV = "conta.csv"
 
 # Criação de conta (administrador apenas no codigo base)
 class Conta:
@@ -56,7 +60,32 @@ class BancoDeContas:
         ids_existentes = [c.id for c in self.contas.values()]
         nova_conta = Conta(usuario, senha, ids_existentes, administrador)
         self.contas[usuario] = nova_conta
+        self.salvar_csv()  # salva as contas no conta.csv sempre que uma nova conta é criada
         return nova_conta
+
+    # Salva todas as contas cadastradas no arquivo conta.csv
+    def salvar_csv(self):
+        with open(ARQUIVO_CONTAS_CSV, mode="w", newline="", encoding="utf-8") as arquivo:
+            escritor = csv.writer(arquivo)
+            escritor.writerow(["id", "usuario", "senha", "administrador"])
+            for conta in self.contas.values():
+                escritor.writerow([conta.id, conta.usuario, conta.senha, conta.administrador])
+
+    # Carrega as contas salvas anteriormente no arquivo conta.csv (se ele existir)
+    def carregar_csv(self):
+        try: # Acho esse try/except meio desnecassário, mas como não tenho custume de usar, coloquei pra ir ganhando prática. Se o arquivo não existir, não há nada pra carregar, então apenas ignora.
+            with open(ARQUIVO_CONTAS_CSV, mode="r", newline="", encoding="utf-8") as arquivo:
+                leitor = csv.DictReader(arquivo)
+                for linha in leitor:
+                    conta = Conta.__new__(Conta)  # não chama __init__ pra manter o id que já estava salvo
+                    conta.id = int(linha["id"])
+                    conta.usuario = linha["usuario"]
+                    conta.senha = linha["senha"]
+                    conta.administrador = linha["administrador"] == "True"
+                    conta.emprestimos = []
+                    self.contas[conta.usuario] = conta
+        except FileNotFoundError:
+            pass  # ainda não existe conta.csv, então não há nada pra carregar
  
     def login(self, usuario, senha):
         conta = self.contas.get(usuario)
@@ -133,6 +162,7 @@ class Biblioteca:
 
 # instancias globais
 banco_contas = BancoDeContas()
+banco_contas.carregar_csv()  # restaura as contas salvas em conta.csv, se existirem
 usuario_atual = UsuarioAtual(banco_contas)
 
 # Conta administradora padrão, já cadastrada de fábrica
@@ -578,6 +608,6 @@ home_info_label = tk.Label(
 home_info_label.grid(row=2, column=0, pady=20)
 
 # INÍCIO
-abrir_inicio()
-
-app.mainloop()
+if __name__ == "__main__": # Bom pra saber quando vai abrir
+    abrir_inicio()
+    app.mainloop()
