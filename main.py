@@ -12,6 +12,7 @@ criar tela com foto
 usar hash?
 """
 import random
+import csv
 import tkinter  as tk
 from tkinter import ttk, messagebox, Menu
 from tkinter.messagebox import showerror, showwarning, showinfo
@@ -24,6 +25,9 @@ COR_CREME = "#FFF4E0"
 COR_BEGE = "#E8D3B9"
 COR_BRANCO = "#FFFDF8"
 COR_TEXTO = "#3E2723"
+
+# Arquivo onde as contas serão salvas
+ARQUIVO_CONTAS_CSV = "conta.csv"
 
 # Criação de conta (administrador apenas no codigo base)
 class Conta:
@@ -56,7 +60,32 @@ class BancoDeContas:
         ids_existentes = [c.id for c in self.contas.values()]
         nova_conta = Conta(usuario, senha, ids_existentes, administrador)
         self.contas[usuario] = nova_conta
+        self.salvar_csv()  # salva as contas no conta.csv sempre que uma nova conta é criada
         return nova_conta
+
+    # Salva todas as contas cadastradas no arquivo conta.csv
+    def salvar_csv(self):
+        with open(ARQUIVO_CONTAS_CSV, mode="w", newline="", encoding="utf-8") as arquivo:
+            escritor = csv.writer(arquivo)
+            escritor.writerow(["id", "usuario", "senha", "administrador"])
+            for conta in self.contas.values():
+                escritor.writerow([conta.id, conta.usuario, conta.senha, conta.administrador])
+
+    # Carrega as contas salvas anteriormente no arquivo conta.csv (se ele existir)
+    def carregar_csv(self):
+        try: # Acho esse try/except meio desnecassário, mas como não tenho custume de usar, coloquei pra ir ganhando prática. Se o arquivo não existir, não há nada pra carregar, então apenas ignora.
+            with open(ARQUIVO_CONTAS_CSV, mode="r", newline="", encoding="utf-8") as arquivo:
+                leitor = csv.DictReader(arquivo)
+                for linha in leitor:
+                    conta = Conta.__new__(Conta)  # não chama __init__ pra manter o id que já estava salvo
+                    conta.id = int(linha["id"])
+                    conta.usuario = linha["usuario"]
+                    conta.senha = linha["senha"]
+                    conta.administrador = linha["administrador"] == "True"
+                    conta.emprestimos = []
+                    self.contas[conta.usuario] = conta
+        except FileNotFoundError:
+            pass  # ainda não existe conta.csv, então não há nada pra carregar
  
     def login(self, usuario, senha):
         conta = self.contas.get(usuario)
@@ -91,15 +120,17 @@ class UsuarioAtual:
 
 # Classe para criação de livros
 class Livro:
-    def __init__(self, nome, autor, ano, codigo_isbn):
+    def __init__(self, nome, autor, ano, codigo_isbn, nota=0):
         self.nome = nome
         self.autor = autor
         self.ano = ano
         self.codigo_isbn = codigo_isbn
+        self.tipo = "Livro"  # Pode ser "Manhwa", "Novel", etc.
         self.emprestado = False
+        self.nota = nota
 
     def __str__(self):
-        return f"{self.nome}, autor: {self.autor}, ano: {self.ano}"
+        return f"{self.nome}, autor: {self.autor}, ano: {self.ano}, tipo: {self.tipo}, nota: {self.nota}"
 
     def emprestar(self):
         if self.emprestado:
@@ -133,7 +164,9 @@ class Biblioteca:
 
 # instancias globais
 banco_contas = BancoDeContas()
+banco_contas.carregar_csv()  # restaura as contas salvas em conta.csv, se existirem
 usuario_atual = UsuarioAtual(banco_contas)
+biblioteca = Biblioteca()
 
 # Conta administradora padrão, já cadastrada de fábrica
 banco_contas.criar_conta("admin", "1111", administrador=True)
@@ -216,7 +249,8 @@ def realizarLogout():
 def esconder_telas():
     start_frame.pack_forget()
     home_frame.pack_forget()
-
+    livros_frame.pack_forget()
+    adicionar_livro_frame.pack_forget()
 
 def abrir_inicio():
     esconder_telas()
@@ -226,6 +260,78 @@ def abrir_inicio():
 def abrir_home():
     esconder_telas()
     home_frame.pack(fill="both", expand=True)
+
+# Atualiza a lista de livros exibida na tela de livros
+def atualizar_lista_livros():
+    for item in livros_tree.get_children():
+        livros_tree.delete(item)
+    for livro in biblioteca.livros:
+        status = "Emprestado" if livro.emprestado else "Disponível"
+        livros_tree.insert("", tk.END, values=(
+            livro.nome, livro.autor, livro.ano, livro.codigo_isbn, livro.tipo, status, f"{livro.nota}/10"
+        ))
+ 
+ 
+# Abre a tela com a lista de livros para empréstimo (disponível para todos os usuários logados)
+def abrir_livros():
+    esconder_telas()
+    atualizar_lista_livros()
+    livros_frame.pack(fill="both", expand=True)
+
+# Abre a tela com a lista de livros para empréstimo (disponível para todos os usuários logados)
+def abrir_livros():
+    esconder_telas()
+    atualizar_lista_livros()
+    livros_frame.pack(fill="both", expand=True)
+ 
+ 
+# Limpa os campos do formulário de adicionar livro
+def limpar_campos_livro():
+    livro_titulo_entry.delete(0, tk.END)
+    livro_autor_entry.delete(0, tk.END)
+    livro_ano_entry.delete(0, tk.END)
+    livro_isbn_entry.delete(0, tk.END)
+    livro_nota_entry.delete(0, tk.END)
+ 
+ 
+# Abre a aba de adicionar livro, apenas para administradores
+def abrir_adicionar_livro():
+    if not usuario_atual.eh_admin():
+        messagebox.showwarning("Acesso negado", "Apenas administradores podem adicionar livros.")
+        return
+    esconder_telas()
+    adicionar_livro_frame.pack(fill="both", expand=True)
+ 
+ 
+# Cadastra um novo livro na biblioteca (apenas administradores)
+def adicionarLivro():
+    if not usuario_atual.eh_admin():
+        messagebox.showwarning("Acesso negado", "Apenas administradores podem adicionar livros.")
+        return
+ 
+    nome = livro_titulo_entry.get().strip()
+    autor = livro_autor_entry.get().strip()
+    ano_texto = livro_ano_entry.get().strip()
+    codigo_isbn = livro_isbn_entry.get().strip()
+    nota_texto = livro_nota_entry.get().strip()
+ 
+    if not nome or not autor or not ano_texto or not codigo_isbn or not nota_texto:
+        messagebox.showwarning("Aviso", "Preencha todos os campos.")
+        return
+ 
+    if not ano_texto.isdigit():
+        messagebox.showwarning("Aviso", "O ano deve ser um número.")
+        return
+ 
+    if not nota_texto.isdigit() or not (1 <= int(nota_texto) <= 10):
+        messagebox.showwarning("Aviso", "A nota deve ser um número inteiro de 1 a 10.")
+        return
+ 
+    novo_livro = Livro(nome, autor, int(ano_texto), codigo_isbn, int(nota_texto))
+    biblioteca.adicionar_livro(novo_livro)
+ 
+    messagebox.showinfo("Sucesso", f"Livro '{nome}' adicionado com sucesso!")
+    limpar_campos_livro()
 
 # JANELA PRINCIPAL
 app = tk.Tk()
@@ -275,6 +381,8 @@ library_menu = tk.Menu(
 )
 
 library_menu.add_command(label="Home", command=abrir_home)
+library_menu.add_command(label="Livros", command=abrir_livros)
+library_menu.add_command(label="Adicionar Livro (Admin)", command=abrir_adicionar_livro)
 library_menu.add_command(label="Logout", command=realizarLogout)
 
 menu_bar.add_cascade(label="Menu", menu=library_menu)
@@ -331,6 +439,24 @@ home_frame = tk.Frame(
 
 home_frame.columnconfigure(0, weight=1)
 home_frame.rowconfigure((0, 1, 2), weight=1)
+
+# FRAME DE LIVROS (lista de livros para empréstimo, com status e nota)
+livros_frame = tk.Frame(
+    app,
+    bg=COR_CREME
+)
+ 
+livros_frame.columnconfigure(0, weight=1)
+livros_frame.rowconfigure(1, weight=1)
+ 
+# FRAME DE ADICIONAR LIVRO (apenas administradores)
+adicionar_livro_frame = tk.Frame(
+    app,
+    bg=COR_CREME
+)
+ 
+adicionar_livro_frame.columnconfigure(0, weight=1)
+adicionar_livro_frame.rowconfigure(tuple(range(15)), weight=1)
 
 # TELA INICIAL
 title_label = tk.Label(
@@ -577,7 +703,225 @@ home_info_label = tk.Label(
 
 home_info_label.grid(row=2, column=0, pady=20)
 
-# INÍCIO
-abrir_inicio()
+# TELA DE LIVROS
+livros_title_label = tk.Label(
+    livros_frame,
+    text="Livros para Empréstimo",
+    bg=COR_CREME,
+    fg=COR_CAFE,
+    font=("Georgia", 26, "bold")
+)
+ 
+livros_title_label.grid(row=0, column=0, pady=20)
+ 
+ 
+livros_tree = ttk.Treeview(
+    livros_frame,
+    columns=("titulo", "autor", "ano", "isbn", "tipo", "status", "nota"),
+    show="headings"
+)
+ 
+livros_tree.heading("titulo", text="Título")
+livros_tree.heading("autor", text="Autor")
+livros_tree.heading("ano", text="Ano")
+livros_tree.heading("isbn", text="Código/ISBN")
+livros_tree.heading("tipo", text="Tipo")
+livros_tree.heading("status", text="Status")
+livros_tree.heading("nota", text="Nota")
+ 
+livros_tree.column("titulo", width=280)
+livros_tree.column("autor", width=200)
+livros_tree.column("ano", width=80, anchor="center")
+livros_tree.column("isbn", width=150, anchor="center")
+livros_tree.column("tipo", width=120, anchor="center")
+livros_tree.column("status", width=120, anchor="center")
+livros_tree.column("nota", width=80, anchor="center")
+ 
+livros_tree.grid(row=1, column=0, padx=40, pady=10, sticky="nsew")
+ 
+ 
+livros_voltar_button = ttk.Button(
+    livros_frame,
+    text="Voltar para Home",
+    command=abrir_home,
+    style="Cinnamon.TButton"
+)
+ 
+livros_voltar_button.grid(row=2, column=0, pady=15)
+ 
+# TELA DE ADICIONAR LIVRO (ADMIN)
+adicionar_livro_title_label = tk.Label(
+    adicionar_livro_frame,
+    text="Adicionar Livro (Administrador)",
+    bg=COR_CREME,
+    fg=COR_CAFE,
+    font=("Georgia", 24, "bold")
+)
+ 
+adicionar_livro_title_label.grid(row=0, column=0, pady=20)
+ 
+ 
+livro_titulo_label = tk.Label(
+    adicionar_livro_frame,
+    text="Título:",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+ 
+livro_titulo_label.grid(row=1, column=0)
+ 
+ 
+livro_titulo_entry = ttk.Entry(
+    adicionar_livro_frame
+)
+ 
+livro_titulo_entry.grid(
+    row=2,
+    column=0,
+    padx=400,
+    pady=5,
+    sticky="ew"
+)
+ 
+ 
+livro_autor_label = tk.Label(
+    adicionar_livro_frame,
+    text="Autor:",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+ 
+livro_autor_label.grid(row=3, column=0)
+ 
+ 
+livro_autor_entry = ttk.Entry(
+    adicionar_livro_frame
+)
+ 
+livro_autor_entry.grid(
+    row=4,
+    column=0,
+    padx=400,
+    pady=5,
+    sticky="ew"
+)
+ 
+ 
+livro_ano_label = tk.Label(
+    adicionar_livro_frame,
+    text="Ano:",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+ 
+livro_ano_label.grid(row=5, column=0)
+ 
+ 
+livro_ano_entry = ttk.Entry(
+    adicionar_livro_frame
+)
+ 
+livro_ano_entry.grid(
+    row=6,
+    column=0,
+    padx=400,
+    pady=5,
+    sticky="ew"
+)
+ 
+ 
+livro_isbn_label = tk.Label(
+    adicionar_livro_frame,
+    text="Código/ISBN:",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+ 
+livro_isbn_label.grid(row=7, column=0)
+ 
+ 
+livro_isbn_entry = ttk.Entry(
+    adicionar_livro_frame
+)
+ 
+livro_isbn_entry.grid(
+    row=8,
+    column=0,
+    padx=400,
+    pady=5,
+    sticky="ew"
+)
 
-app.mainloop()
+livro_tipo_entry = ttk.Entry(
+    adicionar_livro_frame
+)
+
+livro_tipo_entry.grid(
+    row=10,
+    column=0,
+    padx=400,
+    pady=5,
+    sticky="ew"
+)
+
+livro_tipo_label = tk.Label(
+    adicionar_livro_frame,
+    text="Tipo (Livro, Manhwa, Novel, etc.):",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+
+livro_tipo_label.grid(row=9, column=0)
+
+livro_nota_label = tk.Label(
+    adicionar_livro_frame,
+    text="Nota (1 a 10):",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+ 
+livro_nota_label.grid(row=11, column=0)
+ 
+ 
+livro_nota_entry = ttk.Entry(
+    adicionar_livro_frame
+)
+ 
+livro_nota_entry.grid(
+    row=12,
+    column=0,
+    padx=400,
+    pady=5,
+    sticky="ew"
+)
+ 
+ 
+adicionar_livro_submit_button = ttk.Button(
+    adicionar_livro_frame,
+    text="Adicionar Livro",
+    command=adicionarLivro,
+    style="Cinnamon.TButton"
+)
+ 
+adicionar_livro_submit_button.grid(row=13, column=0, pady=15)
+ 
+ 
+adicionar_livro_voltar_button = ttk.Button(
+    adicionar_livro_frame,
+    text="Voltar para Home",
+    command=abrir_home,
+    style="Cinnamon.TButton"
+)
+ 
+adicionar_livro_voltar_button.grid(row=14, column=0)
+
+# INÍCIO
+if __name__ == "__main__": # Bom pra saber quando vai abrir
+    abrir_inicio()
+    app.mainloop()
