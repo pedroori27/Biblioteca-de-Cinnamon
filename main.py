@@ -1,16 +1,3 @@
-"""
-Objetivo:
-Cadastrar livros (título, autor, ano de publicação, código/ISBN, status: disponível ou emprestado)
-Registrar empréstimo de um livro (muda o status para "emprestado")
-Registrar devolução de um livro (muda o status de volta para "disponível")
-Listar todos os livros cadastrados, com seus status
-Buscar um livro por título ou autor
-Ordenar a listagem de livros (por título, autor ou ano)
-Para registrar livros novos precisa de acesso de adminstrador
-adicionar tempo que deve ser devoluido e conta
-criar tela com foto
-usar hash?
-"""
 import random
 import csv
 import tkinter  as tk
@@ -28,6 +15,9 @@ COR_TEXTO = "#3E2723"
 
 # Arquivo onde as contas serão salvas
 ARQUIVO_CONTAS_CSV = "conta.csv"
+
+# Arquivo onde os livros (e seus empréstimos) serão salvos
+ARQUIVO_LIVROS_CSV = "livro.csv"
 
 # Criação de conta (administrador apenas no codigo base)
 class Conta:
@@ -120,28 +110,31 @@ class UsuarioAtual:
 
 # Classe para criação de livros
 class Livro:
-    def __init__(self, nome, autor, ano, codigo_isbn, nota=0):
+    def __init__(self, nome, autor, ano, codigo_isbn, tipo, nota=0):
         self.nome = nome
         self.autor = autor
         self.ano = ano
         self.codigo_isbn = codigo_isbn
-        self.tipo = "Livro"  # Pode ser "Manhwa", "Novel", etc.
+        self.tipo = tipo  # Pode ser "Manhwa", "Novel", etc.
         self.emprestado = False
         self.nota = nota
+        self.emprestado_por = None  # usuário que está com o livro, ou None
 
     def __str__(self):
         return f"{self.nome}, autor: {self.autor}, ano: {self.ano}, tipo: {self.tipo}, nota: {self.nota}"
 
-    def emprestar(self):
+    def emprestar(self, usuario=None):
         if self.emprestado:
             return False, "Não foi possível emprestar: o livro já está emprestado."
         self.emprestado = True
+        self.emprestado_por = usuario
         return True, "Livro emprestado com sucesso."
 
     def devolucao(self):
         if not self.emprestado:
             return False, "Esse livro não está emprestado."
         self.emprestado = False
+        self.emprestado_por = None
         return True, "Livro devolvido com sucesso."
 
 # Classe para gerenciar os livros da biblioteca
@@ -151,6 +144,7 @@ class Biblioteca:
  
     def adicionar_livro(self, livro):
         self.livros.append(livro)
+        self.salvar_csv()  # salva os livros no livro.csv sempre que um novo livro é cadastrado
  
     def buscar(self, termo):
         termo = termo.lower().strip()
@@ -161,15 +155,77 @@ class Biblioteca:
  
     def ordenar(self, chave="nome"):
         self.livros.sort(key=lambda livro: getattr(livro, chave))
+ 
+        # Salva todos os livros cadastrados (com status de empréstimo) no arquivo livro.csv
+    def salvar_csv(self):
+        with open(ARQUIVO_LIVROS_CSV, mode="w", newline="", encoding="utf-8") as arquivo:
+            escritor = csv.writer(arquivo)
+            escritor.writerow(["nome", "autor", "ano", "codigo_isbn", "tipo", "nota", "emprestado", "emprestado_por"])
+            for livro in self.livros:
+                escritor.writerow([
+                    livro.nome, livro.autor, livro.ano, livro.codigo_isbn, livro.tipo,
+                    livro.nota, livro.emprestado, livro.emprestado_por or ""
+                ])
+ 
+    # Carrega os livros salvos anteriormente no arquivo livro.csv (se ele existir),
+    # e reconstrói os empréstimos ativos na conta de cada usuário dono do livro.
+    # Linhas com dados corrompidos/incompatíveis (de versões antigas do arquivo)
+    # são ignoradas com um aviso no console, em vez de derrubar o programa inteiro.
+    def carregar_csv(self):
+        try:
+            with open(ARQUIVO_LIVROS_CSV, mode="r", newline="", encoding="utf-8") as arquivo:
+                leitor = csv.DictReader(arquivo)
+                for numero_linha, linha in enumerate(leitor, start=2):  # linha 1 é o cabeçalho
+                    try:
+                        tipo = linha.get("tipo") or "Livro"
+                        livro = Livro(
+                            linha["nome"], linha["autor"], int(linha["ano"]),
+                            linha["codigo_isbn"], tipo, int(linha["nota"])
+                        )
+                    except (KeyError, ValueError) as erro:
+                        print(f"Aviso: linha {numero_linha} de {ARQUIVO_LIVROS_CSV} ignorada (dado inválido: {erro}).")
+                        continue
+ 
+                    livro.emprestado = linha["emprestado"] == "True"
+                    emprestado_por = linha["emprestado_por"]
+                    if livro.emprestado and emprestado_por:
+                        livro.emprestado_por = emprestado_por
+                        conta_dona = banco_contas.contas.get(emprestado_por)
+                        if conta_dona is not None:
+                            conta_dona.emprestimos.append(livro)
+                    self.livros.append(livro)
+        except FileNotFoundError:
+            pass  # ainda não existe livro.csv, então não há nada pra carregar
 
 # instancias globais
 banco_contas = BancoDeContas()
 banco_contas.carregar_csv()  # restaura as contas salvas em conta.csv, se existirem
 usuario_atual = UsuarioAtual(banco_contas)
 biblioteca = Biblioteca()
+biblioteca.carregar_csv()
+
+# Lista de livros atualmente exibida na tela de Livros (após busca e/ou organização).
+# É usada para mapear corretamente a linha selecionada na tabela ao objeto Livro.
+livros_exibidos = []
 
 # Conta administradora padrão, já cadastrada de fábrica
 banco_contas.criar_conta("admin", "1111", administrador=True)
+
+# Traduz a opção escolhida no combobox de organização para o atributo real do Livro
+MAPA_CHAVES_ORDENACAO = {
+    "Nome": "nome",
+    "Autor": "autor",
+    "Ano": "ano",
+    "Nota": "nota"
+}
+
+
+# Retorna o valor usado como chave de ordenação (texto é comparado sem diferenciar maiúsculas/minúsculas)
+def obter_chave_ordenacao(livro, chave):
+    valor = getattr(livro, chave)
+    if isinstance(valor, str):
+        return valor.lower()
+    return valor
 
 # Abrir campo de segurança (login/registro)
 def limpar_campos_seguranca():
@@ -241,6 +297,9 @@ def realizarLogin():
  
 # Logout
 def realizarLogout():
+    if not usuario_atual.esta_logado():
+                messagebox.showwarning("Aviso", "Não esta conectado a nenhuma conta.")
+                return
     usuario_atual.sair()
     abrir_inicio()
 
@@ -251,6 +310,7 @@ def esconder_telas():
     home_frame.pack_forget()
     livros_frame.pack_forget()
     adicionar_livro_frame.pack_forget()
+    meus_emprestimos_frame.pack_forget()
 
 def abrir_inicio():
     esconder_telas()
@@ -258,30 +318,169 @@ def abrir_inicio():
 
 
 def abrir_home():
+    if not usuario_atual.esta_logado():
+            messagebox.showwarning("Aviso", "Você precisa estar logado para ver.")
+            return
     esconder_telas()
     home_frame.pack(fill="both", expand=True)
 
-# Atualiza a lista de livros exibida na tela de livros
-def atualizar_lista_livros():
+# Atualiza a lista de livros exibida na tela de livros.
+# Se "lista" não for informada, exibe todos os livros da biblioteca (sem filtro).
+def atualizar_lista_livros(lista=None):
+    global livros_exibidos
+    if lista is None:
+        lista = biblioteca.livros
+    livros_exibidos = lista
     for item in livros_tree.get_children():
         livros_tree.delete(item)
-    for livro in biblioteca.livros:
+    for indice, livro in enumerate(livros_exibidos):
         status = "Emprestado" if livro.emprestado else "Disponível"
-        livros_tree.insert("", tk.END, values=(
+        livros_tree.insert("", tk.END, iid=str(indice), values=(
             livro.nome, livro.autor, livro.ano, livro.codigo_isbn, livro.tipo, status, f"{livro.nota}/10"
+        ))
+
+# Retorna o objeto Livro correspondente à linha selecionada na tabela, ou None
+def obter_livro_selecionado():
+    selecionado = livros_tree.selection()
+    if not selecionado:
+        messagebox.showwarning("Aviso", "Selecione um livro na lista.")
+        return None
+    indice = int(selecionado[0])
+    return livros_exibidos[indice]
+
+
+# Reaplica, na tabela, o filtro de busca e a organização (ordenação) atualmente
+# selecionados na tela de Livros. É chamada sempre que a lista precisa ser
+# redesenhada (busca, organização, empréstimo, devolução, abertura da tela).
+def atualizar_livros_com_filtros():
+    termo = livros_busca_entry.get().strip()
+    lista = biblioteca.buscar(termo) if termo else list(biblioteca.livros)
+
+    chave = MAPA_CHAVES_ORDENACAO.get(livros_ordenar_combobox.get(), "nome")
+    decrescente = livros_ordem_combobox.get() == "Decrescente"
+    lista.sort(key=lambda livro: obter_chave_ordenacao(livro, chave), reverse=decrescente)
+
+    atualizar_lista_livros(lista)
+
+
+# Busca os livros pelo termo digitado (título ou autor) e atualiza a tabela
+def buscarLivros():
+    atualizar_livros_com_filtros()
+    if not livros_exibidos:
+        messagebox.showinfo("Busca", "Nenhum livro encontrado para essa busca.")
+
+
+# Limpa o campo de busca e volta a exibir todos os livros (mantendo a organização atual)
+def limparBuscaLivros():
+    livros_busca_entry.delete(0, tk.END)
+    atualizar_livros_com_filtros()
+
+
+# Organiza (ordena) a lista de livros exibida de acordo com o critério e a ordem escolhidos
+def ordenarListaLivros():
+    atualizar_livros_com_filtros()
+ 
+ 
+# Empresta o livro selecionado para o usuário logado
+def emprestarLivro():
+    if not usuario_atual.esta_logado():
+        messagebox.showwarning("Aviso", "Você precisa estar logado para pegar emprestado um livro.")
+        return
+ 
+    livro = obter_livro_selecionado()
+    if livro is None:
+        return
+ 
+    sucesso, mensagem = livro.emprestar(usuario_atual.conta.usuario)
+    if sucesso:
+        usuario_atual.conta.emprestimos.append(livro)
+        messagebox.showinfo("Sucesso", mensagem)
+    else:
+        messagebox.showwarning("Aviso", mensagem)
+ 
+    biblioteca.salvar_csv()
+    atualizar_livros_com_filtros()
+    atualizar_lista_meus_emprestimos()
+ 
+ 
+# Devolve um livro específico, caso ele tenha sido emprestado pelo usuário logado.
+# Usada tanto pela tela de Livros quanto pela tela de Meus Empréstimos.
+def devolver_livro_objeto(livro):
+    if not usuario_atual.esta_logado():
+        messagebox.showwarning("Aviso", "Você precisa estar logado para devolver um livro.")
+        return
+ 
+    if livro not in usuario_atual.conta.emprestimos:
+        messagebox.showwarning("Aviso", "Esse livro não está emprestado por você.")
+        return
+ 
+    sucesso, mensagem = livro.devolucao()
+    if sucesso:
+        usuario_atual.conta.emprestimos.remove(livro)
+        messagebox.showinfo("Sucesso", mensagem)
+    else:
+        messagebox.showwarning("Aviso", mensagem)
+ 
+    biblioteca.salvar_csv()
+    atualizar_livros_com_filtros()
+    atualizar_lista_meus_emprestimos()
+ 
+ 
+# Devolve o livro selecionado na tela de Livros
+def devolverLivro():
+    livro = obter_livro_selecionado()
+    if livro is None:
+        return
+    devolver_livro_objeto(livro)
+ 
+ 
+# Atualiza a lista de livros exibida na tela "Meus Empréstimos"
+def atualizar_lista_meus_emprestimos():
+    for item in meus_emprestimos_tree.get_children():
+        meus_emprestimos_tree.delete(item)
+    if not usuario_atual.esta_logado():
+        return
+    for indice, livro in enumerate(usuario_atual.conta.emprestimos):
+        meus_emprestimos_tree.insert("", tk.END, iid=str(indice), values=(
+            livro.nome, livro.autor, livro.ano, livro.codigo_isbn, f"{livro.nota}/10"
         ))
  
  
-# Abre a tela com a lista de livros para empréstimo (disponível para todos os usuários logados)
-def abrir_livros():
+# Retorna o livro selecionado na tela "Meus Empréstimos", ou None
+def obter_livro_selecionado_meus_emprestimos():
+    selecionado = meus_emprestimos_tree.selection()
+    if not selecionado:
+        messagebox.showwarning("Aviso", "Selecione um livro na lista.")
+        return None
+    indice = int(selecionado[0])
+    return usuario_atual.conta.emprestimos[indice]
+ 
+ 
+# Devolve o livro selecionado na tela "Meus Empréstimos"
+def devolverLivroMeusEmprestimos():
+    livro = obter_livro_selecionado_meus_emprestimos()
+    if livro is None:
+        return
+    devolver_livro_objeto(livro)
+ 
+ 
+# Abre a tela "Meus Empréstimos", com os livros que o usuário logado está com empréstimo ativo
+def abrir_meus_emprestimos():
+    if not usuario_atual.esta_logado():
+        messagebox.showwarning("Aviso", "Você precisa estar logado para ver.")
+        return
     esconder_telas()
-    atualizar_lista_livros()
-    livros_frame.pack(fill="both", expand=True)
+    atualizar_lista_meus_emprestimos()
+    meus_emprestimos_frame.pack(fill="both", expand=True)
+
 
 # Abre a tela com a lista de livros para empréstimo (disponível para todos os usuários logados)
 def abrir_livros():
+    if not usuario_atual.esta_logado():
+            messagebox.showwarning("Aviso", "Você precisa estar logado para ver.")
+            return
     esconder_telas()
-    atualizar_lista_livros()
+    atualizar_livros_com_filtros()
     livros_frame.pack(fill="both", expand=True)
  
  
@@ -291,6 +490,7 @@ def limpar_campos_livro():
     livro_autor_entry.delete(0, tk.END)
     livro_ano_entry.delete(0, tk.END)
     livro_isbn_entry.delete(0, tk.END)
+    livro_tipo_entry.delete(0, tk.END)
     livro_nota_entry.delete(0, tk.END)
  
  
@@ -313,9 +513,10 @@ def adicionarLivro():
     autor = livro_autor_entry.get().strip()
     ano_texto = livro_ano_entry.get().strip()
     codigo_isbn = livro_isbn_entry.get().strip()
+    tipo = livro_tipo_entry.get().strip()
     nota_texto = livro_nota_entry.get().strip()
  
-    if not nome or not autor or not ano_texto or not codigo_isbn or not nota_texto:
+    if not nome or not autor or not ano_texto or not codigo_isbn or not tipo or not nota_texto:
         messagebox.showwarning("Aviso", "Preencha todos os campos.")
         return
  
@@ -327,7 +528,7 @@ def adicionarLivro():
         messagebox.showwarning("Aviso", "A nota deve ser um número inteiro de 1 a 10.")
         return
  
-    novo_livro = Livro(nome, autor, int(ano_texto), codigo_isbn, int(nota_texto))
+    novo_livro = Livro(nome, autor, int(ano_texto), codigo_isbn, tipo, int(nota_texto))
     biblioteca.adicionar_livro(novo_livro)
  
     messagebox.showinfo("Sucesso", f"Livro '{nome}' adicionado com sucesso!")
@@ -382,6 +583,7 @@ library_menu = tk.Menu(
 
 library_menu.add_command(label="Home", command=abrir_home)
 library_menu.add_command(label="Livros", command=abrir_livros)
+library_menu.add_command(label="Meus Empréstimos", command=abrir_meus_emprestimos)
 library_menu.add_command(label="Adicionar Livro (Admin)", command=abrir_adicionar_livro)
 library_menu.add_command(label="Logout", command=realizarLogout)
 
@@ -447,7 +649,7 @@ livros_frame = tk.Frame(
 )
  
 livros_frame.columnconfigure(0, weight=1)
-livros_frame.rowconfigure(1, weight=1)
+livros_frame.rowconfigure(2, weight=1)
  
 # FRAME DE ADICIONAR LIVRO (apenas administradores)
 adicionar_livro_frame = tk.Frame(
@@ -457,6 +659,15 @@ adicionar_livro_frame = tk.Frame(
  
 adicionar_livro_frame.columnconfigure(0, weight=1)
 adicionar_livro_frame.rowconfigure(tuple(range(15)), weight=1)
+
+# FRAME DE MEUS EMPRÉSTIMOS (livros que o usuário logado está com empréstimo ativo)
+meus_emprestimos_frame = tk.Frame(
+    app,
+    bg=COR_CREME
+)
+ 
+meus_emprestimos_frame.columnconfigure(0, weight=1)
+meus_emprestimos_frame.rowconfigure(1, weight=1)
 
 # TELA INICIAL
 title_label = tk.Label(
@@ -713,6 +924,120 @@ livros_title_label = tk.Label(
 )
  
 livros_title_label.grid(row=0, column=0, pady=20)
+
+
+# --- Controles de busca e organização ---
+livros_controles_frame = tk.Frame(
+    livros_frame,
+    bg=COR_CREME
+)
+
+livros_controles_frame.grid(row=1, column=0, pady=(0, 10), sticky="ew")
+livros_controles_frame.columnconfigure(0, weight=1)
+livros_controles_frame.columnconfigure(1, weight=1)
+
+
+# Busca (por título ou autor)
+livros_busca_frame = tk.Frame(
+    livros_controles_frame,
+    bg=COR_CREME
+)
+
+livros_busca_frame.grid(row=0, column=0, padx=40, sticky="w")
+
+
+livros_busca_label = tk.Label(
+    livros_busca_frame,
+    text="Buscar (título ou autor):",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+
+livros_busca_label.grid(row=0, column=0, columnspan=3, sticky="w")
+
+
+livros_busca_entry = ttk.Entry(
+    livros_busca_frame,
+    width=28
+)
+
+livros_busca_entry.grid(row=1, column=0, padx=(0, 5), pady=5)
+livros_busca_entry.bind("<Return>", lambda evento: buscarLivros())
+
+
+livros_busca_button = ttk.Button(
+    livros_busca_frame,
+    text="Buscar",
+    command=buscarLivros,
+    style="Cinnamon.TButton"
+)
+
+livros_busca_button.grid(row=1, column=1, padx=5)
+
+
+livros_busca_limpar_button = ttk.Button(
+    livros_busca_frame,
+    text="Limpar",
+    command=limparBuscaLivros,
+    style="Cinnamon.TButton"
+)
+
+livros_busca_limpar_button.grid(row=1, column=2, padx=5)
+
+
+# Organização (por nome, autor, ano ou nota)
+livros_ordenar_frame = tk.Frame(
+    livros_controles_frame,
+    bg=COR_CREME
+)
+
+livros_ordenar_frame.grid(row=0, column=1, padx=40, sticky="e")
+
+
+livros_ordenar_label = tk.Label(
+    livros_ordenar_frame,
+    text="Organizar por:",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+
+livros_ordenar_label.grid(row=0, column=0, columnspan=3, sticky="w")
+
+
+livros_ordenar_combobox = ttk.Combobox(
+    livros_ordenar_frame,
+    values=["Nome", "Autor", "Ano", "Nota"],
+    state="readonly",
+    width=10
+)
+
+livros_ordenar_combobox.current(0)
+livros_ordenar_combobox.grid(row=1, column=0, padx=(0, 5), pady=5)
+livros_ordenar_combobox.bind("<<ComboboxSelected>>", lambda evento: ordenarListaLivros())
+
+
+livros_ordem_combobox = ttk.Combobox(
+    livros_ordenar_frame,
+    values=["Crescente", "Decrescente"],
+    state="readonly",
+    width=11
+)
+
+livros_ordem_combobox.current(0)
+livros_ordem_combobox.grid(row=1, column=1, padx=5)
+livros_ordem_combobox.bind("<<ComboboxSelected>>", lambda evento: ordenarListaLivros())
+
+
+livros_ordenar_button = ttk.Button(
+    livros_ordenar_frame,
+    text="Organizar",
+    command=ordenarListaLivros,
+    style="Cinnamon.TButton"
+)
+
+livros_ordenar_button.grid(row=1, column=2, padx=5)
  
  
 livros_tree = ttk.Treeview(
@@ -729,15 +1054,43 @@ livros_tree.heading("tipo", text="Tipo")
 livros_tree.heading("status", text="Status")
 livros_tree.heading("nota", text="Nota")
  
-livros_tree.column("titulo", width=280)
-livros_tree.column("autor", width=200)
-livros_tree.column("ano", width=80, anchor="center")
-livros_tree.column("isbn", width=150, anchor="center")
-livros_tree.column("tipo", width=120, anchor="center")
-livros_tree.column("status", width=120, anchor="center")
-livros_tree.column("nota", width=80, anchor="center")
+livros_tree.column("titulo", width=250)
+livros_tree.column("autor", width=180)
+livros_tree.column("ano", width=70, anchor="center")
+livros_tree.column("isbn", width=130, anchor="center")
+livros_tree.column("tipo", width=100, anchor="center")
+livros_tree.column("status", width=110, anchor="center")
+livros_tree.column("nota", width=70, anchor="center")
  
-livros_tree.grid(row=1, column=0, padx=40, pady=10, sticky="nsew")
+livros_tree.grid(row=2, column=0, padx=40, pady=10, sticky="nsew")
+ 
+ 
+livros_botoes_frame = tk.Frame(
+    livros_frame,
+    bg=COR_CREME
+)
+ 
+livros_botoes_frame.grid(row=3, column=0, pady=10)
+ 
+ 
+emprestar_button = ttk.Button(
+    livros_botoes_frame,
+    text="Emprestar Livro",
+    command=emprestarLivro,
+    style="Cinnamon.TButton"
+)
+ 
+emprestar_button.grid(row=0, column=0, padx=10)
+ 
+ 
+devolver_button = ttk.Button(
+    livros_botoes_frame,
+    text="Devolver Livro",
+    command=devolverLivro,
+    style="Cinnamon.TButton"
+)
+ 
+devolver_button.grid(row=0, column=1, padx=10)
  
  
 livros_voltar_button = ttk.Button(
@@ -747,7 +1100,8 @@ livros_voltar_button = ttk.Button(
     style="Cinnamon.TButton"
 )
  
-livros_voltar_button.grid(row=2, column=0, pady=15)
+livros_voltar_button.grid(row=4, column=0, pady=15)
+
  
 # TELA DE ADICIONAR LIVRO (ADMIN)
 adicionar_livro_title_label = tk.Label(
@@ -920,6 +1274,58 @@ adicionar_livro_voltar_button = ttk.Button(
 )
  
 adicionar_livro_voltar_button.grid(row=14, column=0)
+
+# TELA DE MEUS EMPRÉSTIMOS
+meus_emprestimos_title_label = tk.Label(
+    meus_emprestimos_frame,
+    text="Meus Empréstimos",
+    bg=COR_CREME,
+    fg=COR_CAFE,
+    font=("Georgia", 26, "bold")
+)
+ 
+meus_emprestimos_title_label.grid(row=0, column=0, pady=20)
+ 
+ 
+meus_emprestimos_tree = ttk.Treeview(
+    meus_emprestimos_frame,
+    columns=("titulo", "autor", "ano", "isbn", "nota"),
+    show="headings"
+)
+ 
+meus_emprestimos_tree.heading("titulo", text="Título")
+meus_emprestimos_tree.heading("autor", text="Autor")
+meus_emprestimos_tree.heading("ano", text="Ano")
+meus_emprestimos_tree.heading("isbn", text="Código/ISBN")
+meus_emprestimos_tree.heading("nota", text="Nota")
+ 
+meus_emprestimos_tree.column("titulo", width=280)
+meus_emprestimos_tree.column("autor", width=200)
+meus_emprestimos_tree.column("ano", width=80, anchor="center")
+meus_emprestimos_tree.column("isbn", width=150, anchor="center")
+meus_emprestimos_tree.column("nota", width=80, anchor="center")
+ 
+meus_emprestimos_tree.grid(row=1, column=0, padx=40, pady=10, sticky="nsew")
+ 
+ 
+meus_emprestimos_devolver_button = ttk.Button(
+    meus_emprestimos_frame,
+    text="Devolver Livro",
+    command=devolverLivroMeusEmprestimos,
+    style="Cinnamon.TButton"
+)
+ 
+meus_emprestimos_devolver_button.grid(row=2, column=0, pady=10)
+ 
+ 
+meus_emprestimos_voltar_button = ttk.Button(
+    meus_emprestimos_frame,
+    text="Voltar para Home",
+    command=abrir_home,
+    style="Cinnamon.TButton"
+)
+ 
+meus_emprestimos_voltar_button.grid(row=3, column=0, pady=15)
 
 # INÍCIO
 if __name__ == "__main__": # Bom pra saber quando vai abrir
