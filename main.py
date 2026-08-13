@@ -1,16 +1,3 @@
-"""
-Objetivo:
-Cadastrar livros (título, autor, ano de publicação, código/ISBN, status: disponível ou emprestado) -- Feito
-Registrar empréstimo de um livro (muda o status para "emprestado") 
-Registrar devolução de um livro (muda o status de volta para "disponível")
-Listar todos os livros cadastrados, com seus status -- Feito
-Buscar um livro por título ou autor
-Ordenar a listagem de livros (por título, autor ou ano)
-Para registrar livros novos precisa de acesso de adminstrador -- feito
-adicionar tempo que deve ser devoluido e conta
-criar tela com foto -- com foto não mas feito
-usar hash?
-"""
 import random
 import csv
 import tkinter  as tk
@@ -123,7 +110,7 @@ class UsuarioAtual:
 
 # Classe para criação de livros
 class Livro:
-    def __init__(self, nome, autor, ano, codigo_isbn, nota=0, tipo="Livro"):
+    def __init__(self, nome, autor, ano, codigo_isbn, tipo, nota=0):
         self.nome = nome
         self.autor = autor
         self.ano = ano
@@ -168,7 +155,7 @@ class Biblioteca:
  
     def ordenar(self, chave="nome"):
         self.livros.sort(key=lambda livro: getattr(livro, chave))
-
+ 
         # Salva todos os livros cadastrados (com status de empréstimo) no arquivo livro.csv
     def salvar_csv(self):
         with open(ARQUIVO_LIVROS_CSV, mode="w", newline="", encoding="utf-8") as arquivo:
@@ -181,16 +168,24 @@ class Biblioteca:
                 ])
  
     # Carrega os livros salvos anteriormente no arquivo livro.csv (se ele existir),
-    # e reconstrói os empréstimos ativos na conta de cada usuário dono do livro
+    # e reconstrói os empréstimos ativos na conta de cada usuário dono do livro.
+    # Linhas com dados corrompidos/incompatíveis (de versões antigas do arquivo)
+    # são ignoradas com um aviso no console, em vez de derrubar o programa inteiro.
     def carregar_csv(self):
         try:
             with open(ARQUIVO_LIVROS_CSV, mode="r", newline="", encoding="utf-8") as arquivo:
                 leitor = csv.DictReader(arquivo)
-                for linha in leitor:
-                    livro = Livro(
-                        linha["nome"], linha["autor"], int(linha["ano"]),
-                        linha["codigo_isbn"], int(linha["nota"]), linha.get("tipo", "Livro")
-                    )
+                for numero_linha, linha in enumerate(leitor, start=2):  # linha 1 é o cabeçalho
+                    try:
+                        tipo = linha.get("tipo") or "Livro"
+                        livro = Livro(
+                            linha["nome"], linha["autor"], int(linha["ano"]),
+                            linha["codigo_isbn"], tipo, int(linha["nota"])
+                        )
+                    except (KeyError, ValueError) as erro:
+                        print(f"Aviso: linha {numero_linha} de {ARQUIVO_LIVROS_CSV} ignorada (dado inválido: {erro}).")
+                        continue
+ 
                     livro.emprestado = linha["emprestado"] == "True"
                     emprestado_por = linha["emprestado_por"]
                     if livro.emprestado and emprestado_por:
@@ -209,8 +204,28 @@ usuario_atual = UsuarioAtual(banco_contas)
 biblioteca = Biblioteca()
 biblioteca.carregar_csv()
 
+# Lista de livros atualmente exibida na tela de Livros (após busca e/ou organização).
+# É usada para mapear corretamente a linha selecionada na tabela ao objeto Livro.
+livros_exibidos = []
+
 # Conta administradora padrão, já cadastrada de fábrica
 banco_contas.criar_conta("admin", "1111", administrador=True)
+
+# Traduz a opção escolhida no combobox de organização para o atributo real do Livro
+MAPA_CHAVES_ORDENACAO = {
+    "Nome": "nome",
+    "Autor": "autor",
+    "Ano": "ano",
+    "Nota": "nota"
+}
+
+
+# Retorna o valor usado como chave de ordenação (texto é comparado sem diferenciar maiúsculas/minúsculas)
+def obter_chave_ordenacao(livro, chave):
+    valor = getattr(livro, chave)
+    if isinstance(valor, str):
+        return valor.lower()
+    return valor
 
 # Abrir campo de segurança (login/registro)
 def limpar_campos_seguranca():
@@ -309,11 +324,16 @@ def abrir_home():
     esconder_telas()
     home_frame.pack(fill="both", expand=True)
 
-# Atualiza a lista de livros exibida na tela de livros
-def atualizar_lista_livros():
+# Atualiza a lista de livros exibida na tela de livros.
+# Se "lista" não for informada, exibe todos os livros da biblioteca (sem filtro).
+def atualizar_lista_livros(lista=None):
+    global livros_exibidos
+    if lista is None:
+        lista = biblioteca.livros
+    livros_exibidos = lista
     for item in livros_tree.get_children():
         livros_tree.delete(item)
-    for indice, livro in enumerate(biblioteca.livros):
+    for indice, livro in enumerate(livros_exibidos):
         status = "Emprestado" if livro.emprestado else "Disponível"
         livros_tree.insert("", tk.END, iid=str(indice), values=(
             livro.nome, livro.autor, livro.ano, livro.codigo_isbn, livro.tipo, status, f"{livro.nota}/10"
@@ -326,7 +346,39 @@ def obter_livro_selecionado():
         messagebox.showwarning("Aviso", "Selecione um livro na lista.")
         return None
     indice = int(selecionado[0])
-    return biblioteca.livros[indice]
+    return livros_exibidos[indice]
+
+
+# Reaplica, na tabela, o filtro de busca e a organização (ordenação) atualmente
+# selecionados na tela de Livros. É chamada sempre que a lista precisa ser
+# redesenhada (busca, organização, empréstimo, devolução, abertura da tela).
+def atualizar_livros_com_filtros():
+    termo = livros_busca_entry.get().strip()
+    lista = biblioteca.buscar(termo) if termo else list(biblioteca.livros)
+
+    chave = MAPA_CHAVES_ORDENACAO.get(livros_ordenar_combobox.get(), "nome")
+    decrescente = livros_ordem_combobox.get() == "Decrescente"
+    lista.sort(key=lambda livro: obter_chave_ordenacao(livro, chave), reverse=decrescente)
+
+    atualizar_lista_livros(lista)
+
+
+# Busca os livros pelo termo digitado (título ou autor) e atualiza a tabela
+def buscarLivros():
+    atualizar_livros_com_filtros()
+    if not livros_exibidos:
+        messagebox.showinfo("Busca", "Nenhum livro encontrado para essa busca.")
+
+
+# Limpa o campo de busca e volta a exibir todos os livros (mantendo a organização atual)
+def limparBuscaLivros():
+    livros_busca_entry.delete(0, tk.END)
+    atualizar_livros_com_filtros()
+
+
+# Organiza (ordena) a lista de livros exibida de acordo com o critério e a ordem escolhidos
+def ordenarListaLivros():
+    atualizar_livros_com_filtros()
  
  
 # Empresta o livro selecionado para o usuário logado
@@ -347,7 +399,7 @@ def emprestarLivro():
         messagebox.showwarning("Aviso", mensagem)
  
     biblioteca.salvar_csv()
-    atualizar_lista_livros()
+    atualizar_livros_com_filtros()
     atualizar_lista_meus_emprestimos()
  
  
@@ -370,7 +422,7 @@ def devolver_livro_objeto(livro):
         messagebox.showwarning("Aviso", mensagem)
  
     biblioteca.salvar_csv()
-    atualizar_lista_livros()
+    atualizar_livros_com_filtros()
     atualizar_lista_meus_emprestimos()
  
  
@@ -428,7 +480,7 @@ def abrir_livros():
             messagebox.showwarning("Aviso", "Você precisa estar logado para ver.")
             return
     esconder_telas()
-    atualizar_lista_livros()
+    atualizar_livros_com_filtros()
     livros_frame.pack(fill="both", expand=True)
  
  
@@ -438,6 +490,7 @@ def limpar_campos_livro():
     livro_autor_entry.delete(0, tk.END)
     livro_ano_entry.delete(0, tk.END)
     livro_isbn_entry.delete(0, tk.END)
+    livro_tipo_entry.delete(0, tk.END)
     livro_nota_entry.delete(0, tk.END)
  
  
@@ -460,9 +513,10 @@ def adicionarLivro():
     autor = livro_autor_entry.get().strip()
     ano_texto = livro_ano_entry.get().strip()
     codigo_isbn = livro_isbn_entry.get().strip()
+    tipo = livro_tipo_entry.get().strip()
     nota_texto = livro_nota_entry.get().strip()
  
-    if not nome or not autor or not ano_texto or not codigo_isbn or not nota_texto:
+    if not nome or not autor or not ano_texto or not codigo_isbn or not tipo or not nota_texto:
         messagebox.showwarning("Aviso", "Preencha todos os campos.")
         return
  
@@ -474,7 +528,7 @@ def adicionarLivro():
         messagebox.showwarning("Aviso", "A nota deve ser um número inteiro de 1 a 10.")
         return
  
-    novo_livro = Livro(nome, autor, int(ano_texto), codigo_isbn, int(nota_texto))
+    novo_livro = Livro(nome, autor, int(ano_texto), codigo_isbn, tipo, int(nota_texto))
     biblioteca.adicionar_livro(novo_livro)
  
     messagebox.showinfo("Sucesso", f"Livro '{nome}' adicionado com sucesso!")
@@ -595,7 +649,7 @@ livros_frame = tk.Frame(
 )
  
 livros_frame.columnconfigure(0, weight=1)
-livros_frame.rowconfigure(1, weight=1)
+livros_frame.rowconfigure(2, weight=1)
  
 # FRAME DE ADICIONAR LIVRO (apenas administradores)
 adicionar_livro_frame = tk.Frame(
@@ -870,6 +924,120 @@ livros_title_label = tk.Label(
 )
  
 livros_title_label.grid(row=0, column=0, pady=20)
+
+
+# --- Controles de busca e organização ---
+livros_controles_frame = tk.Frame(
+    livros_frame,
+    bg=COR_CREME
+)
+
+livros_controles_frame.grid(row=1, column=0, pady=(0, 10), sticky="ew")
+livros_controles_frame.columnconfigure(0, weight=1)
+livros_controles_frame.columnconfigure(1, weight=1)
+
+
+# Busca (por título ou autor)
+livros_busca_frame = tk.Frame(
+    livros_controles_frame,
+    bg=COR_CREME
+)
+
+livros_busca_frame.grid(row=0, column=0, padx=40, sticky="w")
+
+
+livros_busca_label = tk.Label(
+    livros_busca_frame,
+    text="Buscar (título ou autor):",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+
+livros_busca_label.grid(row=0, column=0, columnspan=3, sticky="w")
+
+
+livros_busca_entry = ttk.Entry(
+    livros_busca_frame,
+    width=28
+)
+
+livros_busca_entry.grid(row=1, column=0, padx=(0, 5), pady=5)
+livros_busca_entry.bind("<Return>", lambda evento: buscarLivros())
+
+
+livros_busca_button = ttk.Button(
+    livros_busca_frame,
+    text="Buscar",
+    command=buscarLivros,
+    style="Cinnamon.TButton"
+)
+
+livros_busca_button.grid(row=1, column=1, padx=5)
+
+
+livros_busca_limpar_button = ttk.Button(
+    livros_busca_frame,
+    text="Limpar",
+    command=limparBuscaLivros,
+    style="Cinnamon.TButton"
+)
+
+livros_busca_limpar_button.grid(row=1, column=2, padx=5)
+
+
+# Organização (por nome, autor, ano ou nota)
+livros_ordenar_frame = tk.Frame(
+    livros_controles_frame,
+    bg=COR_CREME
+)
+
+livros_ordenar_frame.grid(row=0, column=1, padx=40, sticky="e")
+
+
+livros_ordenar_label = tk.Label(
+    livros_ordenar_frame,
+    text="Organizar por:",
+    bg=COR_CREME,
+    fg=COR_TEXTO,
+    font=("Arial", 11)
+)
+
+livros_ordenar_label.grid(row=0, column=0, columnspan=3, sticky="w")
+
+
+livros_ordenar_combobox = ttk.Combobox(
+    livros_ordenar_frame,
+    values=["Nome", "Autor", "Ano", "Nota"],
+    state="readonly",
+    width=10
+)
+
+livros_ordenar_combobox.current(0)
+livros_ordenar_combobox.grid(row=1, column=0, padx=(0, 5), pady=5)
+livros_ordenar_combobox.bind("<<ComboboxSelected>>", lambda evento: ordenarListaLivros())
+
+
+livros_ordem_combobox = ttk.Combobox(
+    livros_ordenar_frame,
+    values=["Crescente", "Decrescente"],
+    state="readonly",
+    width=11
+)
+
+livros_ordem_combobox.current(0)
+livros_ordem_combobox.grid(row=1, column=1, padx=5)
+livros_ordem_combobox.bind("<<ComboboxSelected>>", lambda evento: ordenarListaLivros())
+
+
+livros_ordenar_button = ttk.Button(
+    livros_ordenar_frame,
+    text="Organizar",
+    command=ordenarListaLivros,
+    style="Cinnamon.TButton"
+)
+
+livros_ordenar_button.grid(row=1, column=2, padx=5)
  
  
 livros_tree = ttk.Treeview(
@@ -894,7 +1062,7 @@ livros_tree.column("tipo", width=100, anchor="center")
 livros_tree.column("status", width=110, anchor="center")
 livros_tree.column("nota", width=70, anchor="center")
  
-livros_tree.grid(row=1, column=0, padx=40, pady=10, sticky="nsew")
+livros_tree.grid(row=2, column=0, padx=40, pady=10, sticky="nsew")
  
  
 livros_botoes_frame = tk.Frame(
@@ -902,7 +1070,7 @@ livros_botoes_frame = tk.Frame(
     bg=COR_CREME
 )
  
-livros_botoes_frame.grid(row=2, column=0, pady=10)
+livros_botoes_frame.grid(row=3, column=0, pady=10)
  
  
 emprestar_button = ttk.Button(
@@ -932,7 +1100,7 @@ livros_voltar_button = ttk.Button(
     style="Cinnamon.TButton"
 )
  
-livros_voltar_button.grid(row=3, column=0, pady=15)
+livros_voltar_button.grid(row=4, column=0, pady=15)
 
  
 # TELA DE ADICIONAR LIVRO (ADMIN)
