@@ -1,8 +1,10 @@
-import random
 import csv
+import random
 import tkinter  as tk
 from tkinter import ttk, messagebox, Menu
 from tkinter.messagebox import showerror, showwarning, showinfo
+import secrets
+import hashlib
 
 # CORES
 COR_CARAMELO = "#C68B59"
@@ -23,20 +25,36 @@ ARQUIVO_LIVROS_CSV = "livro.csv"
 class Conta:
     def __init__(self, usuario, senha, ids_existentes, administrador=False):
         self.usuario = usuario
-        self.senha = senha
-        # id único, igual ao NewUser do sistema bancário
+        
+        # 1. Geramos um salt aleatório e seguro para esta conta
+        self._salt = secrets.token_bytes(16)
+        
+        # 2. Transformamos a senha pura em um hash seguro antes de salvar
+        self.senha = hashlib.pbkdf2_hmac(
+            'sha256', 
+            senha.encode('utf-8'), 
+            self._salt, 
+            100000
+        )
+        
+        # ID único
         self.id = random.randrange(1000000, 9999999)
         while self.id in ids_existentes:
             self.id = random.randrange(1000000, 9999999)
+            
         self.administrador = administrador
         self.emprestimos = []  # livros que esta conta está com empréstimo ativo
 
-    def __str__(self):
-        tipo = "Administrador" if self.administrador else "Usuário"
-        return f"ID: {self.id}, Usuário: {self.usuario}, Tipo: {tipo}"
-
-    def __repr__(self):
-            return self.__str__()
+    def verificar_senha(self, senha_digitada):
+        """Gera o hash da senha digitada usando o mesmo salt e compara."""
+        novo_hash = hashlib.pbkdf2_hmac(
+            'sha256', 
+            senha_digitada.encode('utf-8'), 
+            self._salt, 
+            100000
+        )
+        # Compara de forma segura contra ataques de tempo
+        return secrets.compare_digest(self.senha, novo_hash)
 
 # Classe para gerenciar o usuário atual
 class BancoDeContas:
@@ -79,7 +97,7 @@ class BancoDeContas:
  
     def login(self, usuario, senha):
         conta = self.contas.get(usuario)
-        if conta is not None and conta.senha == senha:
+        if conta is not None and conta.verificar_senha(senha):
             self.usuario_atual = conta
             return True
         self.usuario_atual = None
