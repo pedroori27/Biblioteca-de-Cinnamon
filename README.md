@@ -9,6 +9,7 @@ Sobre o projeto
 O Biblioteca de Cinnamon simula o funcionamento de uma biblioteca real: usuários criam uma conta, fazem login, navegam pelo acervo, pesquisam e organizam a listagem de livros, pegam livros emprestados e os devolvem quando quiserem. Administradores têm acesso a uma tela exclusiva para cadastrar novos livros no acervo.
 
 Funcionalidades:
+    
     - Autenticação de usuários
     - criptografia de senhas
     - Registro de nova conta (usuário/senha)
